@@ -427,6 +427,36 @@ static void test_expiry_penalty_skipped_for_gate_freeze(void) {
     assert(cooldown == TIMEOUT_COOLDOWN_MAX_MS);
 }
 
+/* #95: during an active cooldown subsequent expired blocks from the same
+   stalled in-flight window must maintain cooldown but not accumulate strikes. */
+static void test_expiry_penalty_cooldown_suppresses_cascading_strikes(void) {
+    torrent_t torrent = {0};
+    peer_t peer = {0};
+    peer.state = PS_ACTIVE;
+
+    /* First expiry assigns strike 1 and triggers a 2-second cooldown. */
+    uint64_t cooldown = request_expiry_penalty(&torrent, &peer, 10000);
+    assert(peer.timeout_strikes == 1);
+    assert(cooldown == TIMEOUT_COOLDOWN_BASE_MS);
+    peer.request_cooldown_until_ms = 10000 + cooldown;
+
+    /* Further block expiries inside the active cooldown do not increment
+       strikes again. */
+    cooldown = request_expiry_penalty(&torrent, &peer, 10500);
+    assert(peer.timeout_strikes == 1);
+    assert(cooldown == TIMEOUT_COOLDOWN_BASE_MS);
+
+    cooldown = request_expiry_penalty(&torrent, &peer, 11500);
+    assert(peer.timeout_strikes == 1);
+    assert(cooldown == TIMEOUT_COOLDOWN_BASE_MS);
+
+    /* After cooldown expires, a new failure episode increments to strike 2. */
+    peer.request_cooldown_until_ms = 12000;
+    cooldown = request_expiry_penalty(&torrent, &peer, 12001);
+    assert(peer.timeout_strikes == 2);
+    assert(cooldown == TIMEOUT_COOLDOWN_BASE_MS * 2);
+}
+
 static void test_probe_window_until_first_block(void) {
     torrent_t torrent = {0};
     torrent.request_pipeline_limit = 256;
@@ -713,6 +743,7 @@ int main(void) {
     test_rate_freeze_preserves_peer_dl_rate();
     test_rate_freeze_resume_guard_discards_refill_interval();
     test_expiry_penalty_skipped_for_gate_freeze();
+    test_expiry_penalty_cooldown_suppresses_cascading_strikes();
     test_probe_window_until_first_block();
     test_window_binding_growth();
     test_stat_counts_active_peers();

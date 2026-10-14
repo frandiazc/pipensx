@@ -2043,17 +2043,24 @@ static void sample_peer_rates(torrent_t *t, uint64_t elapsed_ms, uint64_t now) {
    cooldown cycles and a dead download (F1). Same for a peer that is
    actively delivering: the expired requests were just queued too deep.
    Expired blocks always return to the pool either way; only the penalty
-   is skipped. */
+   is skipped.
+
+   While the peer is already in an active cooldown (request_cooldown_until_ms > now),
+   subsequent expiries belong to the same stalled in-flight pipeline window.
+   We maintain the cooldown so no new requests are admitted while the stall
+   persists, but avoid stacking multiple strikes for the same timeout episode
+   (#95). */
 static uint64_t request_expiry_penalty(torrent_t *t, peer_t *p, uint64_t now) {
     if (t->rate_freeze)
         return 0;
     if (p->last_piece_ms && p->last_piece_ms <= now &&
         now - p->last_piece_ms < STRIKE_GRACE_MS)
         return 0;
-    if (p->timeout_strikes != UINT32_MAX)
+    if (p->request_cooldown_until_ms <= now && p->timeout_strikes != UINT32_MAX)
         p->timeout_strikes++;
+    uint32_t strikes = p->timeout_strikes > 0 ? p->timeout_strikes : 1;
     uint64_t cooldown = TIMEOUT_COOLDOWN_BASE_MS *
-                        (uint64_t)p->timeout_strikes;
+                        (uint64_t)strikes;
     return cooldown > TIMEOUT_COOLDOWN_MAX_MS ? TIMEOUT_COOLDOWN_MAX_MS
                                               : cooldown;
 }
