@@ -40,6 +40,257 @@ function renderIcons(root = document) {
   });
 }
 
+/* ================= custom dropdowns (web-styled selects) ================= */
+function getSelectedOption(select) {
+  if (select.selectedIndex >= 0 && select.options[select.selectedIndex]) {
+    return select.options[select.selectedIndex];
+  }
+  return [...select.options].find((o) => o.value === select.value) || select.options[0] || null;
+}
+
+function syncCustomSelect(select) {
+  if (!select) return;
+  const wrap = select._customSelectWrap;
+  if (!wrap) return;
+
+  const label = wrap.querySelector(".custom-select-label");
+  const menu = wrap.querySelector(".custom-select-menu");
+  if (!label || !menu) return;
+
+  const selected = getSelectedOption(select);
+  label.textContent = selected ? (selected.textContent || selected.label || selected.value) : "—";
+
+  menu.innerHTML = "";
+  [...select.options].forEach((opt, idx) => {
+    const item = document.createElement("div");
+    const isSelected = selected ? opt.value === selected.value : idx === 0;
+    item.className = "custom-select-option" + (isSelected ? " selected" : "");
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", isSelected ? "true" : "false");
+    item.dataset.value = opt.value;
+
+    const textSpan = document.createElement("span");
+    textSpan.className = "custom-select-option-text";
+    textSpan.textContent = opt.textContent || opt.label || opt.value;
+    item.appendChild(textSpan);
+
+    const checkSpan = document.createElement("span");
+    checkSpan.className = "custom-select-check";
+    checkSpan.setAttribute("aria-hidden", "true");
+    checkSpan.innerHTML = '<svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg>';
+    item.appendChild(checkSpan);
+
+    item.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const changed = select.value !== opt.value;
+      if (changed) {
+        select.value = opt.value;
+        select.dispatchEvent(new Event("input", { bubbles: true }));
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      } else {
+        syncCustomSelect(select);
+      }
+      closeCustomSelect(wrap);
+      const trig = wrap.querySelector(".custom-select-trigger");
+      if (trig) trig.focus();
+    });
+
+    menu.appendChild(item);
+  });
+}
+
+function closeCustomSelect(wrap) {
+  if (!wrap) return;
+  wrap.classList.remove("open", "open-up");
+  const trig = wrap.querySelector(".custom-select-trigger");
+  if (trig) trig.setAttribute("aria-expanded", "false");
+}
+
+function closeAllCustomSelects(exceptWrap = null) {
+  document.querySelectorAll(".custom-select.open").forEach((wrap) => {
+    if (wrap !== exceptWrap) closeCustomSelect(wrap);
+  });
+}
+
+function openCustomSelect(wrap) {
+  closeAllCustomSelects(wrap);
+  wrap.classList.add("open");
+  const trig = wrap.querySelector(".custom-select-trigger");
+  if (trig) trig.setAttribute("aria-expanded", "true");
+
+  const menu = wrap.querySelector(".custom-select-menu");
+  if (!menu || !trig) return;
+
+  const rect = trig.getBoundingClientRect();
+  const spaceBelow = window.innerHeight - rect.bottom;
+  const spaceAbove = rect.top;
+  if (spaceBelow < 220 && spaceAbove > spaceBelow) {
+    wrap.classList.add("open-up");
+  } else {
+    wrap.classList.remove("open-up");
+  }
+
+  const menuRect = menu.getBoundingClientRect();
+  if (menuRect.right > window.innerWidth - 8) {
+    menu.style.left = "auto";
+    menu.style.right = "0";
+  } else {
+    menu.style.left = "0";
+    menu.style.right = "auto";
+  }
+
+  const activeItem = menu.querySelector(".custom-select-option.selected");
+  if (activeItem) {
+    activeItem.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function initCustomSelect(select) {
+  if (!select || select._customSelectWrap) {
+    syncCustomSelect(select);
+    return;
+  }
+
+  select.classList.add("custom-select-native");
+  select.setAttribute("tabindex", "-1");
+  select.setAttribute("aria-hidden", "true");
+
+  const wrap = document.createElement("div");
+  wrap.className = "custom-select";
+  if (select.id) wrap.dataset.selectId = select.id;
+  if (select.classList.contains("filter-chip")) wrap.classList.add("filter-chip-wrap");
+
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "custom-select-trigger";
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "false");
+  if (select.getAttribute("aria-label")) {
+    trigger.setAttribute("aria-label", select.getAttribute("aria-label"));
+  }
+
+  const label = document.createElement("span");
+  label.className = "custom-select-label";
+
+  const arrow = document.createElement("span");
+  arrow.className = "custom-select-arrow";
+  arrow.setAttribute("aria-hidden", "true");
+  arrow.innerHTML = '<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>';
+
+  trigger.appendChild(label);
+  trigger.appendChild(arrow);
+
+  const menu = document.createElement("div");
+  menu.className = "custom-select-menu";
+  menu.setAttribute("role", "listbox");
+  menu.setAttribute("tabindex", "-1");
+
+  wrap.appendChild(trigger);
+  wrap.appendChild(menu);
+
+  trigger.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (wrap.classList.contains("open")) {
+      closeCustomSelect(wrap);
+    } else {
+      openCustomSelect(wrap);
+    }
+  });
+
+  trigger.addEventListener("keydown", (e) => {
+    const isOpen = wrap.classList.contains("open");
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!isOpen) {
+        openCustomSelect(wrap);
+      } else {
+        const options = [...menu.querySelectorAll(".custom-select-option")];
+        if (!options.length) return;
+        const focused = menu.querySelector(".custom-select-option.focused") ||
+          menu.querySelector(".custom-select-option.selected") || options[0];
+        let idx = options.indexOf(focused);
+        if (e.key === "ArrowDown") idx = (idx + 1) % options.length;
+        else idx = (idx - 1 + options.length) % options.length;
+        options.forEach((o, i) => o.classList.toggle("focused", i === idx));
+        options[idx].scrollIntoView({ block: "nearest" });
+      }
+    } else if (e.key === "Enter" || e.key === " ") {
+      if (isOpen) {
+        e.preventDefault();
+        const focused = menu.querySelector(".custom-select-option.focused") ||
+          menu.querySelector(".custom-select-option.selected");
+        if (focused) focused.click();
+      }
+    } else if (e.key === "Escape") {
+      if (isOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeCustomSelect(wrap);
+      }
+    }
+  });
+
+  const labelParent = select.closest("label");
+  if (labelParent) {
+    labelParent.addEventListener("click", (e) => {
+      if (e.target.closest(".custom-select")) return;
+      trigger.focus();
+    });
+  }
+
+  select.parentNode.insertBefore(wrap, select.nextSibling);
+  select._customSelectWrap = wrap;
+  select._customSelectSync = () => syncCustomSelect(select);
+
+  select.addEventListener("change", () => syncCustomSelect(select));
+  select.addEventListener("input", () => syncCustomSelect(select));
+
+  if (typeof MutationObserver !== "undefined") {
+    const observer = new MutationObserver(() => syncCustomSelect(select));
+    observer.observe(select, { childList: true, subtree: true, characterData: true });
+  }
+
+  syncCustomSelect(select);
+}
+
+function initAllCustomSelects() {
+  document.querySelectorAll("select").forEach(initCustomSelect);
+}
+
+function syncAllCustomSelects() {
+  document.querySelectorAll("select").forEach(syncCustomSelect);
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".custom-select")) {
+      closeAllCustomSelects();
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeAllCustomSelects();
+    }
+  });
+  try {
+    const proto = HTMLSelectElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, "value");
+    if (desc && desc.set) {
+      Object.defineProperty(proto, "value", {
+        get: desc.get,
+        set(val) {
+          desc.set.call(this, val);
+          if (this._customSelectSync) this._customSelectSync();
+        },
+        configurable: true,
+        enumerable: true,
+      });
+    }
+  } catch (e) { /* ignore if not configurable */ }
+}
+
 /* ================= i18n ================= */
 const I18N = {
   en: {
@@ -214,6 +465,7 @@ function applyI18n() {
   $("alerts-state").textContent = t(alertsOn() ? "common.on" : "common.off");
   if (typeof library !== "undefined" && library) renderLibrary();
   syncSearchPlaceholder();
+  syncAllCustomSelects();
 }
 function syncSearchPlaceholder() {
   const el = $("global-search");
@@ -463,6 +715,8 @@ function setConn(online) {
   if (ac) ac.textContent = online ? "online" : "offline";
   const head = document.querySelector(".activity-heading");
   if (head) head.classList.toggle("offline", !online);
+  const dot = document.querySelector(".activity-status .status-dot");
+  if (dot) dot.classList.toggle("offline", !online);
 }
 
 function connectEvents() {
@@ -1369,6 +1623,8 @@ function buildCatalogFilters() {
   if ([...gsel.options].some((o) => o.value === gcur)) gsel.value = gcur;
   if ([...ysel.options].some((o) => o.value === ycur)) ysel.value = ycur;
   renderCatalogCount();
+  syncCustomSelect(gsel);
+  syncCustomSelect(ysel);
 }
 function renderCatalogCount() {
   const total = catalog ? catalog.filter(e => e.section === catalogSection).length : 0;
@@ -1465,6 +1721,7 @@ $("flt-reset").addEventListener("click", () => {
   if (gs) gs.value = "";
   $("flt-genre").value = ""; $("flt-year").value = "";
   $("flt-size").value = ""; $("flt-sort").value = "title";
+  syncAllCustomSelects();
   if (catalog) applyCatalogFilter();
 });
 
@@ -1680,6 +1937,8 @@ $("update-apply")?.addEventListener("click", async () => {
 function syncAppearanceControls() {
   $("set-theme").value = localStorage.getItem("pipensxTheme") || "dark";
   $("set-lang").value = lang;
+  syncCustomSelect($("set-theme"));
+  syncCustomSelect($("set-lang"));
 }
 $("set-theme").addEventListener("change", () => {
   localStorage.setItem("pipensxTheme", $("set-theme").value);
@@ -1726,6 +1985,7 @@ async function loadSettings() {
   $("set-realdebrid").placeholder = s.realdebridConfigured ? "••••••••" : "";
   $("set-alldebrid").placeholder = s.alldebridConfigured ? "••••••••" : "";
   settingsLoaded = true;
+  syncAllCustomSelects();
 }
 $("settings-save").addEventListener("click", async () => {
   if (!settingsLoaded) return toast("…", true);
@@ -1857,6 +2117,7 @@ $("library-update-all").addEventListener("click", async () => {
 setInterval(() => { if (currentTab() === "library" && !document.hidden) loadLibrary(); }, 3000);
 
 /* ---------- boot ---------- */
+initAllCustomSelects();
 applyTheme();
 applyI18n();
 syncAppearanceControls();

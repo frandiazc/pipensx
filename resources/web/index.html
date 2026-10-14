@@ -361,24 +361,29 @@
       </section>
     </main>
 
-    <aside class="activity-panel" aria-label="Activity">
+    <aside class="activity activity-panel" id="activity" aria-label="Activity">
       <div class="activity-card">
-        <div class="activity-heading"><span data-icon="git" aria-hidden="true"></span><span id="activity-conn">online</span></div>
+        <div class="activity-heading">
+          <span class="activity-heading-title"><span data-icon="git" aria-hidden="true"></span><span>pipensx</span></span>
+          <span class="activity-status"><i class="status-dot"></i><span id="activity-conn">online</span></span>
+        </div>
         <div class="activity-metric">
           <div class="label" data-i18n="dash.speed">Speed</div>
           <div class="val" id="act-speed">—</div>
         </div>
         <div class="activity-row">
-          <div class="label" data-i18n="dash.storage">SD storage</div>
-          <div class="val" id="act-storage">—</div>
+          <span class="label" data-i18n="dash.storage">SD storage</span>
+          <span class="val" id="act-storage">—</span>
         </div>
         <div class="activity-row">
-          <div class="label" data-i18n="dash.queue">Queue</div>
-          <div class="val" id="act-queue">—</div>
+          <span class="label" data-i18n="dash.queue">Queue</span>
+          <span class="val" id="act-queue">—</span>
         </div>
       </div>
       <div class="activity-card">
-        <div class="activity-heading"><span data-icon="compass" aria-hidden="true"></span><span data-i18n="tabs.catalog">Catalog</span></div>
+        <div class="activity-heading">
+          <span class="activity-heading-title"><span data-icon="compass" aria-hidden="true"></span><span data-i18n="tabs.catalog">Catalog</span></span>
+        </div>
         <div class="activity-metric">
           <div class="label" data-i18n="catalog.title">Games</div>
           <div class="val" id="activity-catalog-count">—</div>
@@ -386,7 +391,9 @@
         </div>
       </div>
       <div class="activity-card">
-        <div class="activity-heading"><span data-icon="layers" aria-hidden="true"></span><span data-i18n="tabs.downloads">Downloads</span></div>
+        <div class="activity-heading">
+          <span class="activity-heading-title"><span data-icon="layers" aria-hidden="true"></span><span data-i18n="tabs.downloads">Downloads</span></span>
+        </div>
         <div id="mini-queue" class="mini-queue"></div>
       </div>
     </aside>
