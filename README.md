@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/i3sey/pipensx/actions/workflows/ci.yml/badge.svg)](https://github.com/i3sey/pipensx/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![Downloads](https://img.shields.io/github/downloads/i3sey/pipensx/latest/pipensx.nro)](https://github.com/i3sey/pipensx/releases/latest)
 
 Native BitTorrent download manager and streaming package installer for
 Nintendo Switch homebrew.
