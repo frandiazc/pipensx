@@ -221,7 +221,16 @@ int main() {
             assert(killedOffset <= 8ull * 1024 * 1024);
         }
         pipensx::install::InstallMarker marker;
-        assert(pipensx::install::loadInstallMarker(killMarkerPath, marker));
+        bool killMarkerReady = false;
+        for (int spins = 0; spins < 3000; ++spins) {
+            if (pipensx::install::loadInstallMarker(killMarkerPath, marker) &&
+                marker.consumed == killedOffset) {
+                killMarkerReady = true;
+                break;
+            }
+            usleep(10000);
+        }
+        assert(killMarkerReady);
         assert(marker.consumed == killedOffset);
         pipensx::install::InstallJournal journal;
         assert(pipensx::install::loadInstallJournal(killJournalPath, journal));

@@ -38,7 +38,7 @@ static int b64Value(char c) {
 
 static std::vector<uint8_t> decodeB64(const char* text) {
     std::vector<uint8_t> out;
-    int val = 0;
+    uint32_t val = 0;
     int valb = -8;
     for (const char* p = text; *p; ++p) {
         if (*p == '=' || *p == '\n')
@@ -46,7 +46,7 @@ static std::vector<uint8_t> decodeB64(const char* text) {
         const int c = b64Value(*p);
         if (c < 0)
             continue;
-        val = (val << 6) + c;
+        val = (val << 6) + static_cast<uint32_t>(c);
         valb += 6;
         if (valb >= 0) {
             out.push_back(static_cast<uint8_t>((val >> valb) & 0xff));

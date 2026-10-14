@@ -11,6 +11,7 @@
 #include "install/install_backend.hpp"
 
 extern "C" {
+#include "core/dht.h"
 #include "core/sha1.h"
 #include "core/util.h"
 }
@@ -972,6 +973,8 @@ int main() {
     }
     manager.shutdown();
     log_close();
+    dht_engine_shutdown();
     printf("test_web_server: all ok\n");
+    fflush(stdout);
     return 0;
 }

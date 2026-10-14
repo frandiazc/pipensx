@@ -178,7 +178,11 @@ static struct {
 };
 
 /* Keep the routing table warm across magnet → torrent (file picker). */
+#ifdef __SWITCH__
 static int g_idle_grace_ms = 90000;
+#else
+static int g_idle_grace_ms = 0;
+#endif
 static atomic_uint g_idle_stoppers;
 
 void dht_engine_set_idle_grace_ms(int ms) {

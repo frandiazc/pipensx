@@ -6,6 +6,7 @@
 #include "app/magnet_resolver.hpp"
 
 extern "C" {
+#include "core/dht.h"
 #include "core/metainfo.h"
 #include "core/sha1.h"
 #include "core/sha256.h"
@@ -3045,6 +3046,8 @@ int main() {
     testLocalImageBypassesBlockedNetworkWorkers();
     testTrackerCancellation();
     runLiveResolutionIfRequested();
+    dht_engine_shutdown();
     std::puts("catalog tests passed");
+    std::fflush(stdout);
     return 0;
 }

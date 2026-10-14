@@ -3,6 +3,7 @@
 #include "../src/install/install_journal.hpp"
 
 extern "C" {
+#include "../src/core/dht.h"
 #include "../src/core/sha1.h"
 #include "../src/core/util.h"
 }
@@ -1612,6 +1613,8 @@ int main() {
         manager.shutdown();
     }
 
+    dht_engine_shutdown();
     std::puts("manager tests passed");
+    std::fflush(stdout);
     return 0;
 }
