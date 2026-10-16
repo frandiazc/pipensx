@@ -117,7 +117,19 @@ bool makeDirectories(const std::string& path) {
     if (path.empty() || path.size() >= sizeof(buffer))
         return false;
     std::snprintf(buffer, sizeof(buffer), "%s", path.c_str());
-    for (char* cursor = buffer + 1; *cursor; ++cursor) {
+    char* start = buffer + 1;
+    char* colon = std::strchr(buffer, ':');
+    if (colon && colon[1] == '/')
+        start = colon + 2;
+    if (*start == '\0') {
+        struct stat st {};
+        return stat(buffer, &st) == 0 && S_ISDIR(st.st_mode);
+    }
+    size_t len = path.size();
+    while (len > 1 && buffer[len - 1] == '/' && (len < 2 || buffer[len - 2] != ':')) {
+        buffer[--len] = '\0';
+    }
+    for (char* cursor = start; *cursor; ++cursor) {
         if (*cursor != '/')
             continue;
         *cursor = '\0';

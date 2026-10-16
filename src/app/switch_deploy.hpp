@@ -195,6 +195,8 @@ SwitchDeployInspection inspectSwitchDeploy(
     bool installExtrasOnly = false, bool preferMainPortArchives = false,
     const PortLayoutRules& manualRules = {});
 
+bool mkdirs(const std::string& path);
+
 class SwitchDeployService {
 public:
     SwitchDeployService(DownloadManager& manager, std::string appRoot,

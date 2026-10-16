@@ -203,12 +203,26 @@ bool mkdirOne(char* path) {
     return S_ISDIR(st.st_mode) != 0;
 }
 
+} // namespace
+
 bool mkdirs(const std::string& path) {
     if (path.empty() || path.size() >= 1024)
         return false;
     char buffer[1024];
     std::snprintf(buffer, sizeof(buffer), "%s", path.c_str());
-    for (char* p = buffer + 1; *p; ++p) {
+    char* start = buffer + 1;
+    char* colon = std::strchr(buffer, ':');
+    if (colon && colon[1] == '/')
+        start = colon + 2;
+    if (*start == '\0') {
+        struct stat st {};
+        return stat(buffer, &st) == 0 && S_ISDIR(st.st_mode);
+    }
+    size_t len = path.size();
+    while (len > 1 && buffer[len - 1] == '/' && (len < 2 || buffer[len - 2] != ':')) {
+        buffer[--len] = '\0';
+    }
+    for (char* p = start; *p; ++p) {
         if (*p != '/')
             continue;
         *p = '\0';
@@ -219,6 +233,8 @@ bool mkdirs(const std::string& path) {
     }
     return mkdirOne(buffer);
 }
+
+namespace {
 
 std::string parentPath(const std::string& path) {
     const size_t slash = path.find_last_of('/');
@@ -2147,20 +2163,31 @@ bool SwitchDeployService::start(const std::string& taskId,
     bool manual = false;
     if (!loadLayout(taskId, rules, manual, error)) return false;
     const auto task = manager_.snapshot(taskId);
-    if ((task && task->mode == TransferMode::PortInstall && (!manual || !manualApproved)) ||
-        (manual && !manualApproved)) {
+    if (!manualApproved &&
+        ((task && task->mode == TransferMode::PortInstall) || manual)) {
         error = "This port waits for installation from the web panel.";
         clearInspecting(taskId);
         return false;
     }
     if (task && task->mode == TransferMode::PortInstall) {
-        TaskFileInventory inventory;
-        if (!buildTaskFileInventory(appRoot_, *task, inventory, error)) return false;
-        if (!std::all_of(inventory.files.begin(), inventory.files.end(),
-            [&rules](const TaskFileInfo& file) { return rules.count(file.logicalPath) != 0; })) {
-            error = "Review every port file and destination before installing.";
-            clearInspecting(taskId);
-            return false;
+        if (manual) {
+            TaskFileInventory inventory;
+            if (!buildTaskFileInventory(appRoot_, *task, inventory, error)) return false;
+            if (!std::all_of(inventory.files.begin(), inventory.files.end(),
+                [&rules](const TaskFileInfo& file) { return rules.count(file.logicalPath) != 0; })) {
+                error = "Review every port file and destination before installing.";
+                clearInspecting(taskId);
+                return false;
+            }
+        } else {
+            const auto inspection = inspect(taskId);
+            if (!inspection.canStart()) {
+                error = inspection.detail.empty()
+                    ? "Review every port file and destination before installing."
+                    : inspection.detail;
+                clearInspecting(taskId);
+                return false;
+            }
         }
     }
     if (workerBusy_.load()) {

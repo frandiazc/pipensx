@@ -2007,6 +2007,71 @@ int main() {
         recoveryManager.shutdown();
     }
 
+    // Issue #99: Automatic PortInstall with nested folder hierarchies (e.g. nfsmw-nx)
+    // must be deployable with manual approval from UI without web panel layout rules,
+    // and mkdirs must recursively create all parent directories without failing on mount prefixes.
+    {
+        assert(mkdirs(root + "/nested-mkdirs/a/b/c/d"));
+        assert(fs::is_directory(root + "/nested-mkdirs/a/b/c/d"));
+        assert(mkdirs(root + "/nested-mkdirs/a/b/c/d/"));
+        assert(mkdirs("/"));
+
+        const std::string portRoot = root + "/issue-99-port";
+        const std::string portData = portRoot + "/downloads/task";
+        const std::string portTarget = portRoot + "/sd/switch";
+        const std::string portId = "9999999999999999999999999999999999999999";
+        fs::create_directories(portTarget);
+        const std::string movieData = "MOVIE-CONTENT";
+        const std::string xexData = "DEFAULT-XEX-CONTENT";
+        writeFile(portData + "/switch/nfsmw-nx/nfsmw.nro", nro);
+        writeFile(portData + "/switch/nfsmw-nx/game_root/default.xex", xexData);
+        writeFile(portData + "/switch/nfsmw-nx/game_root/Movies/attract_movie.wmv", movieData);
+        writeCompletedQueue(portRoot, portId, portData,
+                            nro.size() + xexData.size() + movieData.size(), "port", "completed");
+        TaskFileManifest portManifest;
+        portManifest.taskId = portId;
+        TaskFileRecord nroRec;
+        nroRec.logicalPath = "switch/nfsmw-nx/nfsmw.nro";
+        nroRec.localPath = nroRec.logicalPath;
+        nroRec.size = nro.size();
+        portManifest.files.push_back(nroRec);
+        TaskFileRecord xexRec;
+        xexRec.logicalPath = "switch/nfsmw-nx/game_root/default.xex";
+        xexRec.localPath = xexRec.logicalPath;
+        xexRec.size = xexData.size();
+        portManifest.files.push_back(xexRec);
+        TaskFileRecord movieRec;
+        movieRec.logicalPath = "switch/nfsmw-nx/game_root/Movies/attract_movie.wmv";
+        movieRec.localPath = movieRec.logicalPath;
+        movieRec.size = movieData.size();
+        portManifest.files.push_back(movieRec);
+        assert(saveTaskFileManifest(portRoot, portManifest, error));
+
+        DownloadManager portManager(portRoot, false);
+        SwitchDeployService portDeploy(portManager, portRoot, portTarget);
+        setStorageSpaceOverride(nullptr);
+        SwitchDeployInspection portInspection = portDeploy.inspect(portId);
+        assert(portInspection.canStart());
+        assert(portInspection.plan.files.size() == 3);
+
+        // Unapproved start (e.g. background poll) must not start without confirmation
+        assert(!portDeploy.start(portId, error));
+        assert(error == "This port waits for installation from the web panel.");
+
+        // Manual approval from UI (SwitchDeployPreviewActivity) must start and succeed
+        assert(portDeploy.start(portId, error, true, true));
+        for (int i = 0; i < 500 && portDeploy.snapshot().active(); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        assert(portDeploy.snapshot().phase == SwitchDeployPhase::Completed);
+
+        assert(fs::exists(portTarget + "/nfsmw-nx/nfsmw.nro"));
+        assert(fs::exists(portTarget + "/nfsmw-nx/game_root/default.xex"));
+        assert(fs::exists(portTarget + "/nfsmw-nx/game_root/Movies/attract_movie.wmv"));
+        assert(portDeploy.receiptState(portId) == SwitchDeployReceiptState::Valid);
+        portDeploy.shutdown();
+        portManager.shutdown();
+    }
+
     storage.freeBytes = 1024 * 1024;
     setStorageSpaceOverride(nullptr);
     fs::remove_all(root);

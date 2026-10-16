@@ -627,16 +627,18 @@ public:
         copy->setState(inspection_.canStart() && deploy_
                            ? brls::ButtonState::ENABLED
                            : brls::ButtonState::DISABLED);
-        copy->registerClickAction([this](brls::View*) {
+        copy->registerClickAction([this, copy](brls::View*) {
+            copy->setState(brls::ButtonState::DISABLED);
             std::string error;
-            if (!deploy_ || !deploy_->start(inspection_.plan.taskId, error)) {
+            if (!deploy_ || !deploy_->start(inspection_.plan.taskId, error, true, true)) {
+                copy->setState(brls::ButtonState::ENABLED);
                 const bool busy = error ==
                         "Another /switch copy is already active." ||
                     error == "A package installation is active.";
                 brls::Application::notify(deployProblemText(
                     busy ? SwitchDeployProblem::Busy
                          : SwitchDeployProblem::Io,
-                    {}));
+                    error));
                 return true;
             }
             brls::Application::popActivity(brls::TransitionAnimation::NONE);
