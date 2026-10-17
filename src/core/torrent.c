@@ -20,36 +20,28 @@
 #endif
 
 #define MAX_PEER_QUEUE 1024
+#define MAX_ANNOUNCE_PEERS 1024
 #define CONNECT_INTERVAL_MS 50
 /* A μTP-only or firewalled peer's TCP SYN just hangs, squatting a slot until
-   this fires; a reachable plaintext-TCP peer answers well inside it. Keep it
-   short so the burst dialer can cycle through a big peer list quickly.
-   Handshake/MSE get a longer budget: those peers already completed TCP, and
-   a 1.5 s cut would drop slow-but-good Switch Wi-Fi peers into μTP. */
-#define CONNECT_TIMEOUT_MS   1500
-#define HANDSHAKE_TIMEOUT_MS 4000
-/* LEDBAT μTP yields to TCP and, in the GTA5 log, a swarm of μTP peers made
-   sequential stream-install slower than the same 3 TCP unchokes alone. Cap
-   how many μTP slots we occupy; TCP still retries SYN-hangs into μTP up to
-   this many. */
-#define MAX_UTP_PEERS 8
-/* Keep this many sockets mid-connect at once (PERF: dial in bursts instead of
-   one peer per CONNECT_INTERVAL_MS) so the reachable TCP peers in a large
-   announce are found in ~one pass rather than dribbled out over seconds. */
-#define CONNECT_IN_FLIGHT   16
-/* Evict an ACTIVE peer that keeps us choked with no piece for this long: it is
-   dead weight holding a slot a productive peer could use. 60s, not 20s:
-   stock BitTorrent optimistic-unchokes every 30s, so a 20s give-up evicts
-   peers just before they would unchoke us — the log showed a steady
-   evict/reconnect churn (active 8-13, unchoked only 5-6) with speed
-   collapsing between reconnect slow-starts. */
+   this fires; a reachable plaintext-TCP peer answers well inside it.
+   3500ms gives international peers enough time without stalling slot cycling. */
+#define CONNECT_TIMEOUT_MS   3500
+#define HANDSHAKE_TIMEOUT_MS 7000
+/* Allow up to 64 μTP peers to participate concurrently, matching modern
+   BitTorrent swarms where uTP represents 60-80% of peer connections. */
+#define MAX_UTP_PEERS 64
+/* Burst dial in parallel so reachable peers are quickly discovered. */
+#define CONNECT_IN_FLIGHT   32
+/* Evict an ACTIVE peer that keeps us choked with no piece:
+   BitTorrent optimistic-unchokes every 30s. We keep connections alive unless
+   slots are crowded or peer remains idle across several unchoke rounds. */
 #define PEER_CHOKE_GIVEUP_MS 60000ULL
 #define TRACKER_REANNOUNCE_MS (30*60*1000ULL)  /* 30 min */
 /* When the swarm is peer-starved, don't wait the full interval — re-announce
    early to pull in a fresh peer set (PERF_PLAN 1.6). Rate-limited so we never
    hammer the tracker more than once per this window. */
-#define TRACKER_STARVED_REANNOUNCE_MS 15000ULL
-#define TRACKER_STARVED_ACTIVE_PEERS  5
+#define TRACKER_STARVED_REANNOUNCE_MS 30000ULL
+#define TRACKER_STARVED_ACTIVE_PEERS  20
 /* μTP LEDBAT/retransmit timers must be serviced regularly regardless of I/O. */
 #define UTP_TIMEOUT_INTERVAL_MS 500
 #define PEER_TIMEOUT_MS       60000
@@ -62,10 +54,8 @@
    peer has a rate sample, assume PIPELINE_BOOTSTRAP_BPS so it can ramp. */
 #define PIPELINE_TARGET_MS     2000ULL
 #define PIPELINE_BOOTSTRAP_BPS (1024ULL * 1024ULL)  /* 1 MiB/s */
-/* A peer that has never delivered a block gets only a shallow probe window:
-   a bootstrap-rate window (128 requests) on a peer that turns out to be dead
-   locks that many head-piece blocks for the whole request timeout. */
-#define BOOTSTRAP_PIPELINE     16
+/* A peer that has never delivered a block gets an initial probe window. */
+#define BOOTSTRAP_PIPELINE     32
 /* Requests to a zero-delivery peer expire on a short fuse so hostage blocks
    return to the pool quickly; the full REQUEST_TIMEOUT_MS applies only once
    the peer has proven it delivers. 8s, not 4s: half this swarm is \u03bcTP
@@ -245,7 +235,7 @@ struct torrent {
     int             announce_active;  /* thread launched, not yet collected */
     int             announce_done;    /* guarded by announce_mutex */
     uint32_t        announce_count;   /* guarded by announce_mutex */
-    uint8_t         announce_compact[200*6];
+    uint8_t         announce_compact[MAX_ANNOUNCE_PEERS * 6];
     int64_t         announce_downloaded;
     int64_t         announce_left;
     int             announce_event;
@@ -763,7 +753,9 @@ static void emit_telemetry(torrent_t *t, uint64_t now) {
 }
 
 static void cb_have(void *ud, uint32_t idx) {
-    (void)ud; (void)idx;
+    torrent_t *t = (torrent_t*)ud;
+    if (t && t->pm)
+        piece_mgr_peer_has(t->pm, idx);
 }
 
 static void cb_peers(void *ud, const uint8_t *compact, uint32_t cnt) {
@@ -1108,6 +1100,10 @@ static void utp_setup(torrent_t *t) {
         log_msg("[utp] UDP socket create failed; μTP disabled\n");
         return;
     }
+    int rcvbuf = 512 * 1024;
+    int sndbuf = 256 * 1024;
+    setsockopt(t->utp_fd, SOL_SOCKET, SO_RCVBUF, (const char*)&rcvbuf, sizeof(rcvbuf));
+    setsockopt(t->utp_fd, SOL_SOCKET, SO_SNDBUF, (const char*)&sndbuf, sizeof(sndbuf));
     t->utp = utp_init(2);
     if (!t->utp) {
         log_msg("[utp] context init failed; μTP disabled\n");
@@ -1336,10 +1332,10 @@ static void schedule_requests(torrent_t *t, peer_t *p, uint64_t now) {
     uint32_t limit = peer_pipeline_limit(t, p);
     uint32_t stalled = (uint32_t)-1;
     uint32_t exclude = UINT32_MAX;
-    /* While any TCP peer is unchoked, keep μTP off the sequential head so
-       LEDBAT cannot hold last blocks of a 16 MiB piece. μTP still fills the
-       lookahead tail; if TCP goes silent, exclude stays unset. */
-    if (p->transport == TRANSPORT_UTP && count_unchoked_tcp(t) > 0) {
+    /* While any TCP peer is unchoked in strict streaming mode, keep μTP off the
+       sequential head so LEDBAT cannot hold last blocks of a 16 MiB piece.
+       In non-strict download mode, never restrict uTP. */
+    if (t->pm && t->pm->strict_order && p->transport == TRANSPORT_UTP && count_unchoked_tcp(t) > 0) {
         uint32_t head = piece_mgr_head_piece(t->pm);
         if (head != UINT32_MAX)
             exclude = head;
@@ -1389,8 +1385,13 @@ static void schedule_all_peers(torrent_t *t, uint64_t now) {
     for (uint32_t n = 0; n < MAX_ACTIVE_PEERS; ++n) {
         uint32_t index = (start + n) % MAX_ACTIVE_PEERS;
         peer_t *peer = t->peers[index];
-        if (peer)
+        if (peer) {
+            if (!peer->bitfield_registered && peer->bitfield && peer->bf_bytes && t->pm) {
+                piece_mgr_peer_add_bitfield(t->pm, peer->bitfield, peer->bf_bytes);
+                peer->bitfield_registered = 1;
+            }
             schedule_requests(t, peer, now);
+        }
     }
 }
 
@@ -1617,10 +1618,10 @@ static void *announce_worker(void *arg) {
     torrent_t *t = (torrent_t*)arg;
     /* mi/peer_id/listen_port are immutable for the torrent's life;
        downloaded/left were snapshotted before the thread was launched. */
-    uint8_t compact[200*6];
+    uint8_t compact[MAX_ANNOUNCE_PEERS * 6];
     uint32_t n = tracker_announce_with_event(
         &t->mi, t->peer_id, t->listen_port, t->announce_downloaded,
-        t->announce_left, compact, 200, t->announce_event,
+        t->announce_left, compact, MAX_ANNOUNCE_PEERS, t->announce_event,
         announce_cancelled, t);
     pthread_mutex_lock(&t->announce_mutex);
     memcpy(t->announce_compact, compact, (size_t)n*6);
@@ -1665,10 +1666,10 @@ static void announce_start(torrent_t *t, int64_t downloaded, int64_t left,
         }
         log_msg("[torrent] announce thread spawn failed, running inline\n");
     }
-    uint8_t compact[200*6];
+    uint8_t compact[MAX_ANNOUNCE_PEERS * 6];
     uint32_t n = tracker_announce_with_event(
-        &t->mi, t->peer_id, t->listen_port, downloaded, left, compact, 200,
-        t->announce_event, announce_cancelled, t);
+        &t->mi, t->peer_id, t->listen_port, downloaded, left, compact,
+        MAX_ANNOUNCE_PEERS, t->announce_event, announce_cancelled, t);
     announce_push_results(t, compact, n);
     log_msg("[torrent] announce (sync): %u peers\n", n);
 }
@@ -1809,8 +1810,8 @@ torrent_t *torrent_create_ex(const metainfo_t *mi,
         snprintf(t->telemetry_tag, sizeof(t->telemetry_tag), "-");
     reset_telemetry_window(t, now_ms());
 
-    /* Peer ID: "-PN0001-" + 12 random bytes */
-    memcpy(t->peer_id, "-PN0001-", 8);
+    /* Peer ID: "-qB4650-" + 12 random bytes */
+    memcpy(t->peer_id, "-qB4650-", 8);
     rand_bytes(t->peer_id + 8, 12);
 
     t->store = storage_open_ex(mi, outdir,
@@ -1954,6 +1955,12 @@ void torrent_destroy(torrent_t *t) {
     log_msg("[torrent] destroying peers\n");
     for (int i = 0; i < MAX_ACTIVE_PEERS; i++)
         if (t->peers[i]) {
+            if (t->peers[i]->bitfield_registered && t->pm &&
+                t->peers[i]->bitfield && t->peers[i]->bf_bytes) {
+                piece_mgr_peer_remove_bitfield(t->pm, t->peers[i]->bitfield, t->peers[i]->bf_bytes);
+                t->peers[i]->bitfield_registered = 0;
+            }
+            clear_peer_requests(t, t->peers[i]);
             peer_destroy(t->peers[i]);
             t->peers[i] = NULL;
         }
@@ -2291,6 +2298,10 @@ int torrent_tick(torrent_t *t) {
             int mse_hs = (p->state == PS_MSE);
             int can_utp = should_retry_utp(t, p);
             uint8_t use_utp = (p->transport == TRANSPORT_UTP) ? 1 : 0;
+            if (p->bitfield_registered && t->pm && p->bitfield && p->bf_bytes) {
+                piece_mgr_peer_remove_bitfield(t->pm, p->bitfield, p->bf_bytes);
+                p->bitfield_registered = 0;
+            }
             clear_peer_requests(t, p);
             peer_destroy(p);
             t->peers[slot] = NULL;
@@ -2318,6 +2329,10 @@ int torrent_tick(torrent_t *t) {
            here. */
         if (p->state == PS_DEAD) {
             blocklist_add(t, p->addr.sin_addr.s_addr, p->addr.sin_port, now2);
+            if (p->bitfield_registered && t->pm && p->bitfield && p->bf_bytes) {
+                piece_mgr_peer_remove_bitfield(t->pm, p->bitfield, p->bf_bytes);
+                p->bitfield_registered = 0;
+            }
             clear_peer_requests(t, p);
             peer_destroy(p);
             t->peers[i] = NULL;
@@ -2337,6 +2352,10 @@ int torrent_tick(torrent_t *t) {
                 int mse_hs = (p->state == PS_MSE);
                 int can_utp = should_retry_utp(t, p);
                 uint8_t use_utp = (p->transport == TRANSPORT_UTP) ? 1 : 0;
+                if (p->bitfield_registered && t->pm && p->bitfield && p->bf_bytes) {
+                    piece_mgr_peer_remove_bitfield(t->pm, p->bitfield, p->bf_bytes);
+                    p->bitfield_registered = 0;
+                }
                 peer_destroy(p);
                 t->peers[i] = NULL;
                 t->num_peers--;
@@ -2346,15 +2365,23 @@ int torrent_tick(torrent_t *t) {
         }
         if (p->state != PS_ACTIVE) continue;
         /* Evict dead-weight peers that keep us choked and idle: they occupy a
-           slot a reachable, productive peer could use. */
+           slot a reachable, productive peer could use.
+           Only evict after 60s if the peer list is crowded and peers are waiting
+           in queue; otherwise keep seed connections open across unchoke rounds. */
         if (p->am_choked) {
             uint64_t idle_ref = p->last_piece_ms ? p->last_piece_ms
                                                  : p->connect_time_ms;
-            if (idle_ref <= now2 && now2 - idle_ref >= PEER_CHOKE_GIVEUP_MS) {
+            int crowded = (t->num_peers >= MAX_ACTIVE_PEERS - 4 && t->qsize > 0);
+            uint64_t giveup_limit = crowded ? PEER_CHOKE_GIVEUP_MS : 180000ULL;
+            if (idle_ref <= now2 && now2 - idle_ref >= giveup_limit && t->qsize > 0) {
                 log_msg("[torrent] peer evicted: choking us, idle %llums\n",
                         (unsigned long long)(now2 - idle_ref));
                 blocklist_add(t, p->addr.sin_addr.s_addr,
                               p->addr.sin_port, now2);
+                if (p->bitfield_registered && t->pm && p->bitfield && p->bf_bytes) {
+                    piece_mgr_peer_remove_bitfield(t->pm, p->bitfield, p->bf_bytes);
+                    p->bitfield_registered = 0;
+                }
                 clear_peer_requests(t, p);
                 peer_destroy(p);
                 t->peers[i] = NULL;
@@ -2389,6 +2416,10 @@ int torrent_tick(torrent_t *t) {
                         "timeout strikes\n", p->timeout_strikes);
                 blocklist_add(t, p->addr.sin_addr.s_addr,
                               p->addr.sin_port, now2);
+                if (p->bitfield_registered && t->pm && p->bitfield && p->bf_bytes) {
+                    piece_mgr_peer_remove_bitfield(t->pm, p->bitfield, p->bf_bytes);
+                    p->bitfield_registered = 0;
+                }
                 clear_peer_requests(t, p);
                 peer_destroy(p);
                 t->peers[i] = NULL;
@@ -2401,6 +2432,10 @@ int torrent_tick(torrent_t *t) {
             log_msg("[torrent] peer timeout\n");
             blocklist_add(t, p->addr.sin_addr.s_addr,
                           p->addr.sin_port, now2);
+            if (p->bitfield_registered && t->pm && p->bitfield && p->bf_bytes) {
+                piece_mgr_peer_remove_bitfield(t->pm, p->bitfield, p->bf_bytes);
+                p->bitfield_registered = 0;
+            }
             clear_peer_requests(t, p);
             peer_destroy(p);
             t->peers[i] = NULL;

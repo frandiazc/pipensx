@@ -368,6 +368,42 @@ void injectMissingFallbackTrackers(metainfo_t& mi) {
     }
 }
 
+void enrichTorrentTrackers(metainfo_t& mi) {
+    if (mi.is_private) {
+        log_msg("[manager] torrent is flagged private (BEP 27); omitting open fallback trackers\n");
+        return;
+    }
+
+    auto hasTracker = [&](const std::string& url) -> bool {
+        for (uint32_t i = 0; i < mi.num_trackers; ++i) {
+            if (url == mi.trackers[i])
+                return true;
+        }
+        return false;
+    };
+
+    auto addTracker = [&](const std::string& url) {
+        if (mi.num_trackers >= MAX_TRACKERS)
+            return;
+        if (hasTracker(url))
+            return;
+        std::snprintf(mi.trackers[mi.num_trackers],
+                      sizeof(mi.trackers[0]), "%s", url.c_str());
+        ++mi.num_trackers;
+    };
+
+    // If no trackers at all, heal with RuTracker pool first
+    if (mi.num_trackers == 0) {
+        for (const auto& t : rutrackerFallbackTrackers())
+            addTracker(t);
+    }
+
+    // Always append top high-uptime public open trackers to expand swarm discovery
+    for (const auto& t : publicOpenTrackers()) {
+        addTracker(t);
+    }
+}
+
 void updateTaskDownloadProgress(DownloadTask& task, uint64_t completedBytes,
                                 uint64_t progressAtMs) {
     // During startup/final verification the engine reports completed_bytes
@@ -2961,16 +2997,12 @@ void DownloadManager::runTask(RunnerSlot* slot, ClaimedTask claim) {
         }
         return;
     }
-    /* #94: torrents resolved while the HTTPS cache won the metadata race
-       were stored without a single tracker, leaving the engine DHT-only.
-       Every start of a tracker-less task injects the RuTracker mirror pool
-       in memory — this heals downloads queued by older builds without
-       touching the stored .torrent on disk. */
-    if (metainfo.num_trackers == 0) {
-        injectMissingFallbackTrackers(metainfo);
-        log_msg("[manager] task %s had no trackers; injected %u RuTracker "
-                "fallback announce(s)\n",
+    const uint32_t trackersBefore = metainfo.num_trackers;
+    enrichTorrentTrackers(metainfo);
+    if (metainfo.num_trackers > trackersBefore) {
+        log_msg("[manager] task %s enriched trackers: %u -> %u\n",
                 activeId.c_str(),
+                static_cast<unsigned>(trackersBefore),
                 static_cast<unsigned>(metainfo.num_trackers));
     }
 
@@ -3036,6 +3068,11 @@ void DownloadManager::runTask(RunnerSlot* slot, ClaimedTask claim) {
             // Was 64 (1 MiB), which pinned even 2 MB/s peers at the ceiling.
             options.request_pipeline_limit = 256;
             options.hedge_after_ms = 5000;
+        } else {
+            // Arbitrary torrent download mode: full pipelining, rarest-first piece picker
+            options.strict_piece_order = 0;
+            options.request_pipeline_limit = 256;
+            options.hedge_after_ms = 4000;
         }
         options.telemetry_tag = activeId.c_str();
         if (!resumeBitfield.empty()) {

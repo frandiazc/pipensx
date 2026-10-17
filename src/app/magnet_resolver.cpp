@@ -945,6 +945,23 @@ std::vector<std::string> rutrackerFallbackTrackers() {
             "http://bt4.t-ru.org/ann?magnet"};
 }
 
+std::vector<std::string> publicOpenTrackers() {
+    return {
+        "udp://tracker.opentrackr.org:1337/announce",
+        "udp://open.demonii.com:1337/announce",
+        "udp://open.stealth.si:80/announce",
+        "udp://tracker.torrent.eu.org:451/announce",
+        "udp://explodie.org:6969/announce",
+        "udp://tracker.openbittorrent.com:6969/announce",
+        "udp://tracker.tiny-vps.com:6969/announce",
+        "udp://tracker.moeking.me:6969/announce",
+        "udp://p4p.arenabg.com:1337/announce",
+        "udp://retracker.lanta-net.ru:2710/announce",
+        "http://tracker.opentrackr.org:1337/announce",
+        "http://tracker.openbittorrent.com:80/announce"
+    };
+}
+
 
 bool MagnetResolver::parse(const std::string& uri, MagnetSpec& spec,
                            std::string& error) {
@@ -1146,7 +1163,7 @@ bool MagnetResolver::resolveToFile(const std::string& uri,
     ResolveStop raceStop{&cancelled, &stopWorkers};
 
     uint8_t peerId[20];
-    std::memcpy(peerId, "-PN0001-", 8);
+    std::memcpy(peerId, "-qB4650-", 8);
     rand_bytes(peerId + 8, 12);
 
     if (progress)

@@ -2,7 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define MAX_TRACKERS  32
+#define MAX_TRACKERS  64
 /* Multi-file torrent ceiling. Unpacked port/homebrew trees (e.g. Lain at
    ~8352 files) exceed the old 4096 cap; keep aligned with
    port_archive.cpp kMaxProbeFiles and switch_deploy kMaxReceiptUnpacked. */
@@ -26,6 +26,7 @@ typedef struct {
     /* Identity */
     uint8_t  info_hash[20];
     char     name[MAX_NAME_LEN];
+    int      is_private;
 
     /* Piece info */
     int64_t  piece_length;

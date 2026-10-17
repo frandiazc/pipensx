@@ -309,6 +309,7 @@ piece_mgr_t *piece_mgr_create_ex(const metainfo_t *mi, storage_t *store,
     pm->slots      = (piece_slot_t*)calloc(mi->num_pieces, sizeof(piece_slot_t));
     pm->have_bf    = (uint8_t*)calloc((mi->num_pieces + 7) / 8, 1);
     pm->available_bf = (uint8_t*)calloc((mi->num_pieces + 7) / 8, 1);
+    pm->peer_have_count = (uint16_t*)calloc(mi->num_pieces, sizeof(uint16_t));
     pm->strict_order = strict_order;
     pm->strict_order_lookahead = STRICT_ORDER_LOOKAHEAD;
     /* Async hash worker sync primitives. On failure fall back to inline
@@ -344,7 +345,7 @@ piece_mgr_t *piece_mgr_create_ex(const metainfo_t *mi, storage_t *store,
             }
         }
     }
-    if (!pm->slots || !pm->have_bf || !pm->available_bf ||
+    if (!pm->slots || !pm->have_bf || !pm->available_bf || !pm->peer_have_count ||
         (piece_order && piece_order_count &&
          (!pm->piece_order || !pm->order_pos))) {
         if (pm->hash_ok) {
@@ -353,6 +354,7 @@ piece_mgr_t *piece_mgr_create_ex(const metainfo_t *mi, storage_t *store,
             pthread_cond_destroy(&pm->hash_done_cond);
         }
         free(pm->slots); free(pm->have_bf); free(pm->available_bf);
+        free(pm->peer_have_count);
         free(pm->piece_order); free(pm->order_pos); free(pm);
         return NULL;
     }
@@ -403,6 +405,7 @@ void piece_mgr_destroy(piece_mgr_t *pm) {
     free(pm->slots);
     free(pm->have_bf);
     free(pm->available_bf);
+    free(pm->peer_have_count);
     free(pm->piece_order);
     free(pm->order_pos);
     free(pm->verify_buf);
@@ -702,6 +705,44 @@ static int slot_has_requestable_block(const piece_slot_t *slot) {
     return 0;
 }
 
+void piece_mgr_peer_has(piece_mgr_t *pm, uint32_t idx) {
+    if (!pm || !pm->peer_have_count || idx >= pm->num_pieces)
+        return;
+    if (pm->peer_have_count[idx] < UINT16_MAX)
+        pm->peer_have_count[idx]++;
+}
+
+void piece_mgr_peer_lacks(piece_mgr_t *pm, uint32_t idx) {
+    if (!pm || !pm->peer_have_count || idx >= pm->num_pieces)
+        return;
+    if (pm->peer_have_count[idx] > 0)
+        pm->peer_have_count[idx]--;
+}
+
+void piece_mgr_peer_add_bitfield(piece_mgr_t *pm, const uint8_t *peer_bf,
+                                 uint32_t bf_bytes) {
+    if (!pm || !pm->peer_have_count || !peer_bf)
+        return;
+    for (uint32_t i = 0; i < pm->num_pieces; i++) {
+        if (i / 8 < bf_bytes && bf_has(peer_bf, i)) {
+            if (pm->peer_have_count[i] < UINT16_MAX)
+                pm->peer_have_count[i]++;
+        }
+    }
+}
+
+void piece_mgr_peer_remove_bitfield(piece_mgr_t *pm, const uint8_t *peer_bf,
+                                    uint32_t bf_bytes) {
+    if (!pm || !pm->peer_have_count || !peer_bf)
+        return;
+    for (uint32_t i = 0; i < pm->num_pieces; i++) {
+        if (i / 8 < bf_bytes && bf_has(peer_bf, i)) {
+            if (pm->peer_have_count[i] > 0)
+                pm->peer_have_count[i]--;
+        }
+    }
+}
+
 uint32_t piece_mgr_pick_excluding(const piece_mgr_t *pm,
                                   const uint8_t *peer_bf, uint32_t bf_bytes,
                                   uint32_t exclude) {
@@ -753,34 +794,74 @@ uint32_t piece_mgr_pick_excluding(const piece_mgr_t *pm,
         return (uint32_t)-1;
     }
 
-    /* Rarest-first would be ideal, but for minimality we do sequential:
-       find the first piece the peer has and we don't (not DONE, not PENDING). */
-    for (uint32_t i = 0; i < pm->num_pieces; i++) {
-        if (i == exclude) continue;
-        if (!request_allowed(pm, i)) continue;
-        if (pm->slots[i].state != PS_EMPTY) continue;
-        if (at_buf_cap(pm)) continue;
-        if (!bf_has(pm->have_bf, i)) {
-            if (i / 8 < bf_bytes && bf_has(peer_bf, i))
-                return i;
-        }
-    }
-    /* Second pass: fill remaining blocks of PENDING pieces. Skip a piece
-       whose leftover blocks are already requested — otherwise the scheduler
-       queues nothing and stops filling this peer. */
+    /* Non-strict mode (arbitrary torrent downloads):
+       Pass 1: Prioritize finishing in-progress (PS_PENDING) pieces that have
+       requestable blocks. Completing pending pieces immediately frees buffer
+       memory, finalizes piece files, and broadcasts HAVE messages to the swarm
+       so other peers unchoke us faster. */
     for (uint32_t i = 0; i < pm->num_pieces; i++) {
         if (i == exclude) continue;
         if (!request_allowed(pm, i)) continue;
         if (pm->slots[i].state == PS_DONE ||
             pm->slots[i].state == PS_HASHING) continue;
         if (pm->slots[i].state == PS_PENDING &&
-            !slot_has_requestable_block(&pm->slots[i]))
-            continue;
-        if (!bf_has(pm->have_bf, i)) {
-            if (i / 8 < bf_bytes && bf_has(peer_bf, i))
-                return i;
+            slot_has_requestable_block(&pm->slots[i])) {
+            if (!bf_has(pm->have_bf, i)) {
+                if (i / 8 < bf_bytes && bf_has(peer_bf, i))
+                    return i;
+            }
         }
     }
+
+    /* Pass 2: Rarest-First on new (PS_EMPTY) pieces.
+       Select the piece available from this peer that is rarest in the swarm,
+       maximizing overall swarm health and reciprocal unchokes.
+       Tie-break using pick_cursor to spread starting pieces across the torrent. */
+    if (!at_buf_cap(pm)) {
+        uint32_t best_piece = (uint32_t)-1;
+        uint32_t min_rarity = UINT32_MAX;
+        uint32_t start = pm->num_pieces ? (((piece_mgr_t*)pm)->pick_cursor % pm->num_pieces) : 0;
+
+        for (uint32_t step = 0; step < pm->num_pieces; step++) {
+            uint32_t i = (start + step) % pm->num_pieces;
+            if (i == exclude) continue;
+            if (!request_allowed(pm, i)) continue;
+            if (pm->slots[i].state != PS_EMPTY) continue;
+            if (bf_has(pm->have_bf, i)) continue;
+            if (i / 8 >= bf_bytes || !bf_has(peer_bf, i)) continue;
+
+            uint32_t rarity = pm->peer_have_count ? pm->peer_have_count[i] : 1;
+            if (rarity < min_rarity) {
+                min_rarity = rarity;
+                best_piece = i;
+                if (rarity == 1) {
+                    /* Cannot be rarer than 1 peer having it */
+                    break;
+                }
+            }
+        }
+        if (best_piece != (uint32_t)-1) {
+            ((piece_mgr_t*)pm)->pick_cursor = (best_piece + 1) % pm->num_pieces;
+            return best_piece;
+        }
+    }
+
+    /* Pass 3: Fallback scan for any requestable block in case a pending piece
+       became requestable during evaluation. */
+    for (uint32_t i = 0; i < pm->num_pieces; i++) {
+        if (i == exclude) continue;
+        if (!request_allowed(pm, i)) continue;
+        if (pm->slots[i].state == PS_DONE ||
+            pm->slots[i].state == PS_HASHING) continue;
+        if (pm->slots[i].state == PS_PENDING &&
+            slot_has_requestable_block(&pm->slots[i])) {
+            if (!bf_has(pm->have_bf, i)) {
+                if (i / 8 < bf_bytes && bf_has(peer_bf, i))
+                    return i;
+            }
+        }
+    }
+
     return (uint32_t)-1;
 }
 

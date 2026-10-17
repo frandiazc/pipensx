@@ -131,7 +131,7 @@ static uint32_t http_announce_once(const char *url,
 
     curl_buf_t buf = {0};
     curl_easy_setopt(curl, CURLOPT_URL, full_url);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "pipensx/0.4");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "qBittorrent/4.6.5");
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
     /* Every handle here runs on a background thread; without this
@@ -233,10 +233,10 @@ static uint32_t http_announce(const char *url,
 #define UDP_CONNECT  0
 #define UDP_ANNOUNCE 1
 #ifndef UDP_RETRIES
-#define UDP_RETRIES 3
+#define UDP_RETRIES 2
 #endif
 #ifndef UDP_RETRY_TIMEOUT_MS
-#define UDP_RETRY_TIMEOUT_MS 2500
+#define UDP_RETRY_TIMEOUT_MS 1500
 #endif
 
 static void wr64be(uint8_t *p, uint64_t v) {

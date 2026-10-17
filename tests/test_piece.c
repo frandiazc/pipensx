@@ -955,6 +955,44 @@ static void test_non_strict_pick_skips_fully_requested_pending(void) {
     free_test_metainfo(&mi);
 }
 
+static void test_non_strict_rarest_first_picker(void) {
+    metainfo_t mi;
+    init_single_file_metainfo(&mi, "rarest.bin", BLOCK_SIZE, 3 * BLOCK_SIZE);
+    piece_mgr_t *pm = piece_mgr_create_ex(&mi, NULL, 0, NULL, 0);
+    assert(pm);
+
+    /* 3 pieces (0, 1, 2). All PS_EMPTY. */
+    /* Peer 1 bitfield: has piece 0 and piece 2. */
+    uint8_t peer1_bf[1] = {0};
+    bf_set(peer1_bf, 0);
+    bf_set(peer1_bf, 2);
+    piece_mgr_peer_add_bitfield(pm, peer1_bf, sizeof(peer1_bf));
+
+    /* Peer 2 bitfield: has piece 0. */
+    uint8_t peer2_bf[1] = {0};
+    bf_set(peer2_bf, 0);
+    piece_mgr_peer_add_bitfield(pm, peer2_bf, sizeof(peer2_bf));
+
+    /* Availability: piece 0 has 2, piece 2 has 1, piece 1 has 0. */
+    /* Peer 3 has all 0, 1, 2. Piece 1 is rarest (0 peers), so picking for Peer 3 returns 1. */
+    uint8_t peer3_bf[1] = {0};
+    bf_set(peer3_bf, 0);
+    bf_set(peer3_bf, 1);
+    bf_set(peer3_bf, 2);
+    assert(piece_mgr_pick(pm, peer3_bf, sizeof(peer3_bf)) == 1);
+
+    /* If peer only has 0 and 2, piece 2 (count 1) is rarer than piece 0 (count 2) */
+    assert(piece_mgr_pick(pm, peer1_bf, sizeof(peer1_bf)) == 2);
+
+    /* Remove peer 1 bitfield */
+    piece_mgr_peer_remove_bitfield(pm, peer1_bf, sizeof(peer1_bf));
+    /* Now piece 2 count is 0, piece 0 count is 1 */
+    assert(piece_mgr_pick(pm, peer1_bf, sizeof(peer1_bf)) == 2);
+
+    piece_mgr_destroy(pm);
+    free_test_metainfo(&mi);
+}
+
 /* BEP-19 url-list parsing: a single-file torrent carrying one web seed. */
 static void test_metainfo_web_seeds_parse(void) {
     uint8_t pieces[20];
@@ -1438,6 +1476,7 @@ int main(void) {
     test_strict_order_prefers_requestable_pending_piece();
     test_strict_order_pick_excluding_head();
     test_non_strict_pick_skips_fully_requested_pending();
+    test_non_strict_rarest_first_picker();
     test_metainfo_web_seeds_parse();
     test_async_hash_defers_completion_until_drain();
     test_async_hash_mismatch_resets_and_redownloads();

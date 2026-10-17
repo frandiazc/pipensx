@@ -62,6 +62,10 @@ enum class TaskSource { Torrent, Debrid };
 // No-op when the torrent already carries an announce. Exposed for tests.
 void injectMissingFallbackTrackers(metainfo_t& mi);
 
+// Enriches non-private torrents with canonical open trackers up to MAX_TRACKERS
+// to ensure swarms have diverse, high-availability peer sources.
+void enrichTorrentTrackers(metainfo_t& mi);
+
 enum class TransferMode {
     DownloadOnly,
     StreamInstall,

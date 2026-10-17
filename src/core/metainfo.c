@@ -70,6 +70,12 @@ int metainfo_parse(const uint8_t *data, size_t len, metainfo_t *mi) {
         return 0;
     }
 
+    /* private flag (BEP 27) */
+    if (be_dict_get(info_node.buf, info_node.buf + info_node.raw_len, "private", 7, &v) && v.type == BE_INT)
+        mi->is_private = (v.ival == 1);
+    else
+        mi->is_private = 0;
+
     /* piece length */
     if (!be_dict_get(info_node.buf, info_node.buf + info_node.raw_len, "piece length", 12, &v) || v.type != BE_INT) {
         log_msg("[meta] no piece length\n");

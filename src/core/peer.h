@@ -95,6 +95,7 @@ typedef struct peer {
 
     uint8_t *bitfield;
     uint32_t bf_bytes;
+    uint8_t  bitfield_registered;
 
     /* Pending requests */
     block_req_t pipeline[MAX_PIPELINE];

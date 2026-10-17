@@ -196,6 +196,8 @@ int peer_send_ext_handshake(peer_t *p, uint16_t listen_port) {
     buf[off++] = 'e'; /* end m */
     off += snprintf((char*)buf+off, sizeof(buf)-off, "1:pi%ue", (unsigned)listen_port);
     off += snprintf((char*)buf+off, sizeof(buf)-off, "11:upload_onlyi0e");
+    off += snprintf((char*)buf+off, sizeof(buf)-off, "4:reqqi500e");
+    off += snprintf((char*)buf+off, sizeof(buf)-off, "1:v17:qBittorrent 4.6.5");
     buf[off++] = 'e'; /* end outer dict */
     int r = send_msg(p, buf, (uint32_t)off);
     p->ext_handshake_sent = 1;

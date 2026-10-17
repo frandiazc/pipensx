@@ -73,4 +73,7 @@ bool httpsCacheErrorRetryable(const std::string& error);
 // injected into stored .torrent files that carry no announce at all (#94).
 std::vector<std::string> rutrackerFallbackTrackers();
 
+// Canonical high-reliability public open trackers for arbitrary torrents.
+std::vector<std::string> publicOpenTrackers();
+
 } // namespace pipensx

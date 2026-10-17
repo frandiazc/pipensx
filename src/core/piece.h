@@ -77,6 +77,8 @@ typedef struct {
        instead of rescanning every completed piece. */
     uint32_t          order_cursor;
     uint32_t         *order_pos;  /* piece index -> piece_order position */
+    uint16_t         *peer_have_count; /* swarm availability count per piece [num_pieces] */
+    uint32_t          pick_cursor;     /* round-robin cursor for rarest-first tie breaking */
     int             (*request_allowed)(void *user, uint32_t piece);
     void             *request_allowed_user;
     /* ---- async hash worker ----
@@ -193,6 +195,14 @@ void piece_mgr_clear_block_requested(piece_mgr_t *pm, uint32_t idx,
                                      uint32_t block);
 void piece_mgr_clear_all_block_requests(piece_mgr_t *pm, uint32_t idx,
                                         uint32_t block);
+
+/* Swarm rarity accounting */
+void piece_mgr_peer_has(piece_mgr_t *pm, uint32_t idx);
+void piece_mgr_peer_lacks(piece_mgr_t *pm, uint32_t idx);
+void piece_mgr_peer_add_bitfield(piece_mgr_t *pm, const uint8_t *peer_bf,
+                                 uint32_t bf_bytes);
+void piece_mgr_peer_remove_bitfield(piece_mgr_t *pm, const uint8_t *peer_bf,
+                                    uint32_t bf_bytes);
 
 /*
  * Pick the next piece index to request from a peer.
