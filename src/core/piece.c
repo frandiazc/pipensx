@@ -830,12 +830,12 @@ uint32_t piece_mgr_pick_excluding(const piece_mgr_t *pm,
             if (bf_has(pm->have_bf, i)) continue;
             if (i / 8 >= bf_bytes || !bf_has(peer_bf, i)) continue;
 
-            uint32_t rarity = pm->peer_have_count ? pm->peer_have_count[i] : 1;
+            uint32_t rarity = pm->peer_have_count ? pm->peer_have_count[i] : 0;
             if (rarity < min_rarity) {
                 min_rarity = rarity;
                 best_piece = i;
-                if (rarity == 1) {
-                    /* Cannot be rarer than 1 peer having it */
+                if (rarity == 0) {
+                    /* Cannot be rarer than 0 other peers having it */
                     break;
                 }
             }
