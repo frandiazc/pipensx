@@ -490,6 +490,8 @@ static int process_message(peer_t *p, const peer_ctx_t *ctx,
            record what pieces the peer has. */
         if (plen <= p->bf_bytes) {
             memcpy(p->bitfield, payload, plen);
+            if (ctx && ctx->on_bitfield)
+                ctx->on_bitfield(ud, p);
         }
         break;
     case MSG_PIECE:

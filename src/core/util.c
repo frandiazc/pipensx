@@ -111,7 +111,7 @@ void log_init(const char *path) {
         g_log_dirty = 0;
         g_log_stop = 0;
         g_log_thread_started =
-            pthread_create(&g_log_thread, NULL, log_flush_worker, NULL) == 0;
+            util_thread_create(&g_log_thread, 128 * 1024, log_flush_worker, NULL) == 0;
         pthread_mutex_unlock(&g_log_mutex);
     }
 }
@@ -335,4 +335,16 @@ void rand_bytes(uint8_t *buf, size_t n) {
     if (f) { fread(buf, 1, n, f); fclose(f); }
     else { for (size_t i = 0; i < n; i++) buf[i] = (uint8_t)(rand() >> 3); }
 #endif
+}
+
+int util_thread_create(pthread_t *thread, size_t stack_size,
+                       void *(*start_routine)(void *), void *arg) {
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) != 0)
+        return pthread_create(thread, NULL, start_routine, arg);
+    if (stack_size > 0)
+        pthread_attr_setstacksize(&attr, stack_size);
+    int rc = pthread_create(thread, &attr, start_routine, arg);
+    pthread_attr_destroy(&attr);
+    return rc;
 }

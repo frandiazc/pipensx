@@ -412,11 +412,16 @@ private:
 
     static uint32_t inflightLimitFromBudget(const StreamRamBudget& budget,
                                             uint64_t pieceLengthBytes) {
-        if (!pieceLengthBytes ||
-            budget.maxPieceBufferBytes < pieceLengthBytes)
-            return 0;
+        if (!pieceLengthBytes)
+            return 4;
+        if (budget.maxPieceBufferBytes < pieceLengthBytes)
+            return 2;
         uint64_t n = budget.maxPieceBufferBytes / pieceLengthBytes;
-        return n > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(n);
+        if (n < 2)
+            n = 2;
+        if (n > 64)
+            n = 64;
+        return static_cast<uint32_t>(n);
     }
 
     static int sinkThunk(void* user, uint32_t fileIndex,

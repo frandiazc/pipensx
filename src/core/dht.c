@@ -379,7 +379,7 @@ static int dht_engine_start(void) {
     atomic_store(&g_dht.stop, 0);
     g_dht.bootstrapped = 0;
     g_dht.last_bootstrap = 0;
-    if (pthread_create(&g_dht.thread, NULL, dht_thread_main, NULL) != 0) {
+    if (util_thread_create(&g_dht.thread, 256 * 1024, dht_thread_main, NULL) != 0) {
         dht_uninit();
         net_close(g_dht.fd);
         g_dht.fd = INVALID_SOCK;
@@ -545,7 +545,7 @@ void dht_detach(dht_session_t *s) {
             int gen = ++g_dht.idle_gen;
             pthread_t idle;
             atomic_fetch_add(&g_idle_stoppers, 1);
-            if (pthread_create(&idle, NULL, dht_idle_stop_main,
+            if (util_thread_create(&idle, 256 * 1024, dht_idle_stop_main,
                                (void*)(intptr_t)gen) == 0) {
                 pthread_detach(idle);
             } else {

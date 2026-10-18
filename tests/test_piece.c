@@ -989,6 +989,12 @@ static void test_non_strict_rarest_first_picker(void) {
     /* Now piece 2 count is 0, piece 0 count is 1 */
     assert(piece_mgr_pick(pm, peer1_bf, sizeof(peer1_bf)) == 2);
 
+    /* Test in-flight buffer cap: when inflight >= limit, new empty pieces must not be picked */
+    piece_mgr_set_buf_limit(pm, 1);
+    piece_mgr_mark_pending(pm, 2);
+    piece_mgr_mark_block_requested(pm, 2, 0);
+    assert(piece_mgr_pick(pm, peer1_bf, sizeof(peer1_bf)) == (uint32_t)-1);
+
     piece_mgr_destroy(pm);
     free_test_metainfo(&mi);
 }

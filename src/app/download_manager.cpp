@@ -3061,6 +3061,10 @@ void DownloadManager::runTask(RunnerSlot* slot, ClaimedTask claim) {
             // install sink's backlog (PERF_PLAN 5.1).
             options.strict_order_lookahead = coordinator->initialLookahead();
             options.max_inflight_pieces = coordinator->maxInflightPieces();
+            if (options.max_inflight_pieces == 0) {
+                options.max_inflight_pieces = std::clamp<uint32_t>(
+                    (48 * 1024 * 1024) / std::max<uint32_t>(metainfo.piece_length, 1), 4, 32);
+            }
             options.strict_fill_pending_first = 1;
             // Per-peer in-flight ceiling (4 MiB = 256 x 16 KiB blocks =
             // MAX_PIPELINE). The engine scales the actual window per peer by
@@ -3071,6 +3075,8 @@ void DownloadManager::runTask(RunnerSlot* slot, ClaimedTask claim) {
         } else {
             // Arbitrary torrent download mode: full pipelining, rarest-first piece picker
             options.strict_piece_order = 0;
+            options.max_inflight_pieces = std::clamp<uint32_t>(
+                (48 * 1024 * 1024) / std::max<uint32_t>(metainfo.piece_length, 1), 4, 32);
             options.request_pipeline_limit = 256;
             options.hedge_after_ms = 4000;
         }

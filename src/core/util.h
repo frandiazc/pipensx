@@ -61,6 +61,8 @@ void hex20(char buf[41], const uint8_t hash[20]);
 /* Random bytes — implemented differently per platform */
 void rand_bytes(uint8_t *buf, size_t n);
 
+#include <pthread.h>
+
 /* Bitfield helpers (pieces/have bitfield: MSB first per BT spec) */
 static inline int bf_has(const uint8_t *bf, uint32_t idx) {
     return (bf[idx/8] >> (7 - idx%8)) & 1;
@@ -68,3 +70,8 @@ static inline int bf_has(const uint8_t *bf, uint32_t idx) {
 static inline void bf_set(uint8_t *bf, uint32_t idx) {
     bf[idx/8] |= (1u << (7 - idx%8));
 }
+
+/* Helper to create pthreads with an explicit safe stack size (e.g. 256 KiB)
+   preventing devkitPro/libnx 16 KiB default pthread stack overflow. */
+int util_thread_create(pthread_t *thread, size_t stack_size,
+                       void *(*start_routine)(void *), void *arg);

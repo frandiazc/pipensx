@@ -166,6 +166,7 @@ typedef struct {
     const uint8_t *our_bf;    /* our have-bitfield */
     uint16_t       listen_port;
     int            use_mse;   /* attempt MSE/PE on outgoing connections */
+    void         (*on_bitfield)(void *ud, struct peer *p);
 } peer_ctx_t;
 
 /* Allocate/free a peer slot. peer_create opens a TCP peer around an already

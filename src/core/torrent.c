@@ -758,6 +758,18 @@ static void cb_have(void *ud, uint32_t idx) {
         piece_mgr_peer_has(t->pm, idx);
 }
 
+static void cb_bitfield(void *ud, peer_t *p) {
+    torrent_t *t = (torrent_t*)ud;
+    if (!t || !t->pm || !p || !p->bitfield || !p->bf_bytes)
+        return;
+    if (p->bitfield_registered) {
+        piece_mgr_peer_remove_bitfield(t->pm, p->bitfield, p->bf_bytes);
+        p->bitfield_registered = 0;
+    }
+    piece_mgr_peer_add_bitfield(t->pm, p->bitfield, p->bf_bytes);
+    p->bitfield_registered = 1;
+}
+
 static void cb_peers(void *ud, const uint8_t *compact, uint32_t cnt) {
     torrent_t *t = (torrent_t*)ud;
     for (uint32_t i = 0; i < cnt; i++) {
@@ -794,6 +806,7 @@ static void fill_ctx(torrent_t *t, peer_ctx_t *ctx) {
     ctx->our_bf      = t->pm->available_bf;
     ctx->listen_port = t->listen_port;
     ctx->use_mse     = 1; /* try MSE/PE first to reach encryption-required peers */
+    ctx->on_bitfield = cb_bitfield;
 }
 
 /* Magnet → torrent live sockets. Compact IPs (PERF_PLAN 7.7) still reconnect;
@@ -1386,10 +1399,6 @@ static void schedule_all_peers(torrent_t *t, uint64_t now) {
         uint32_t index = (start + n) % MAX_ACTIVE_PEERS;
         peer_t *peer = t->peers[index];
         if (peer) {
-            if (!peer->bitfield_registered && peer->bitfield && peer->bf_bytes && t->pm) {
-                piece_mgr_peer_add_bitfield(t->pm, peer->bitfield, peer->bf_bytes);
-                peer->bitfield_registered = 1;
-            }
             schedule_requests(t, peer, now);
         }
     }
@@ -1618,7 +1627,14 @@ static void *announce_worker(void *arg) {
     torrent_t *t = (torrent_t*)arg;
     /* mi/peer_id/listen_port are immutable for the torrent's life;
        downloaded/left were snapshotted before the thread was launched. */
-    uint8_t compact[MAX_ANNOUNCE_PEERS * 6];
+    uint8_t *compact = (uint8_t*)malloc(MAX_ANNOUNCE_PEERS * 6);
+    if (!compact) {
+        pthread_mutex_lock(&t->announce_mutex);
+        t->announce_count = 0;
+        t->announce_done  = 1;
+        pthread_mutex_unlock(&t->announce_mutex);
+        return NULL;
+    }
     uint32_t n = tracker_announce_with_event(
         &t->mi, t->peer_id, t->listen_port, t->announce_downloaded,
         t->announce_left, compact, MAX_ANNOUNCE_PEERS, t->announce_event,
@@ -1628,6 +1644,7 @@ static void *announce_worker(void *arg) {
     t->announce_count = n;
     t->announce_done  = 1;
     pthread_mutex_unlock(&t->announce_mutex);
+    free(compact);
     return NULL;
 }
 
@@ -1660,18 +1677,21 @@ static void announce_start(torrent_t *t, int64_t downloaded, int64_t left,
     if (t->async_ok) {
         t->announce_done  = 0;
         t->announce_count = 0;
-        if (pthread_create(&t->announce_thread, NULL, announce_worker, t) == 0) {
+        if (util_thread_create(&t->announce_thread, 512 * 1024, announce_worker, t) == 0) {
             t->announce_active = 1;
             return;
         }
         log_msg("[torrent] announce thread spawn failed, running inline\n");
     }
-    uint8_t compact[MAX_ANNOUNCE_PEERS * 6];
-    uint32_t n = tracker_announce_with_event(
-        &t->mi, t->peer_id, t->listen_port, downloaded, left, compact,
-        MAX_ANNOUNCE_PEERS, t->announce_event, announce_cancelled, t);
-    announce_push_results(t, compact, n);
-    log_msg("[torrent] announce (sync): %u peers\n", n);
+    uint8_t *compact = (uint8_t*)malloc(MAX_ANNOUNCE_PEERS * 6);
+    if (compact) {
+        uint32_t n = tracker_announce_with_event(
+            &t->mi, t->peer_id, t->listen_port, downloaded, left, compact,
+            MAX_ANNOUNCE_PEERS, t->announce_event, announce_cancelled, t);
+        announce_push_results(t, compact, n);
+        log_msg("[torrent] announce (sync): %u peers\n", n);
+        free(compact);
+    }
 }
 
 struct stopped_announce {
@@ -1707,7 +1727,7 @@ static void announce_stopped_async(torrent_t *t) {
     job->listen_port = t->listen_port;
     torrent_announce_totals(t, &job->downloaded, &job->left);
     pthread_t thread;
-    if (pthread_create(&thread, NULL, stopped_announce_worker, job) != 0) {
+    if (util_thread_create(&thread, 512 * 1024, stopped_announce_worker, job) != 0) {
         free(job);
         return;
     }
@@ -1831,8 +1851,14 @@ torrent_t *torrent_create_ex(const metainfo_t *mi,
         piece_mgr_set_strict_policy(t->pm,
                                     options->strict_order_lookahead,
                                     options->strict_fill_pending_first);
-        if (options->max_inflight_pieces)
+        if (options->max_inflight_pieces) {
             piece_mgr_set_buf_limit(t->pm, options->max_inflight_pieces);
+        } else if (t->pm && mi->piece_length) {
+            uint32_t safe_limit = (uint32_t)((48ULL * 1024ULL * 1024ULL) / mi->piece_length);
+            if (safe_limit < 4) safe_limit = 4;
+            if (safe_limit > 32) safe_limit = 32;
+            piece_mgr_set_buf_limit(t->pm, safe_limit);
+        }
         if (options->have_bitfield &&
             options->have_bitfield_len == (mi->num_pieces + 7) / 8) {
             /* Fast resume: trust the bitfield saved at the last orderly
@@ -1846,6 +1872,11 @@ torrent_t *torrent_create_ex(const metainfo_t *mi,
             log_msg("[torrent] fast-resume: %u/%u pieces preset\n",
                     t->pm->num_done, t->pm->num_pieces);
         }
+    } else if (t->pm && mi->piece_length) {
+        uint32_t safe_limit = (uint32_t)((48ULL * 1024ULL * 1024ULL) / mi->piece_length);
+        if (safe_limit < 4) safe_limit = 4;
+        if (safe_limit > 32) safe_limit = 32;
+        piece_mgr_set_buf_limit(t->pm, safe_limit);
     }
 
     refresh_skipped_bytes(t);
@@ -1876,7 +1907,7 @@ torrent_t *torrent_create_ex(const metainfo_t *mi,
 #ifdef __SWITCH__
     /* UPnP port mapping — best-effort, one-shot in the background so it does
        not block startup. Joined in torrent_destroy. */
-    if (pthread_create(&t->upnp_thread, NULL, upnp_worker, t) == 0)
+    if (util_thread_create(&t->upnp_thread, 256 * 1024, upnp_worker, t) == 0)
         t->upnp_thread_active = 1;
     else
         log_msg("[upnp] worker spawn failed\n");

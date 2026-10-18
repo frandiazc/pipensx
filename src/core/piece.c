@@ -260,7 +260,7 @@ static int hash_enqueue(piece_mgr_t *pm, uint32_t idx, piece_slot_t *sl,
     if (!pm->hash_ok || !pm->store)
         return 0;
     if (!pm->hash_started) {
-        if (pthread_create(&pm->hash_thread, NULL, hash_worker, pm) != 0) {
+        if (util_thread_create(&pm->hash_thread, 256 * 1024, hash_worker, pm) != 0) {
             log_msg("[piece] hash worker spawn failed, hashing inline\n");
             pm->hash_ok = 0;
             return 0;
